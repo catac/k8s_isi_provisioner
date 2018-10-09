@@ -24,7 +24,6 @@ import (
 	"os"
 	"path"
 	"strings"
-	"time"
 
 	"syscall"
 
@@ -40,14 +39,7 @@ import (
 )
 
 const (
-	defaultProvisionerName    = "example.com/isilon"
-	exponentialBackOffOnError = false
-	failedRetryThreshold      = 5
-	resyncPeriod              = 15 * time.Second
-	leasePeriod               = controller.DefaultLeaseDuration
-	retryPeriod               = controller.DefaultRetryPeriod
-	renewDeadline             = controller.DefaultRenewDeadline
-	termLimit                 = controller.DefaultTermLimit
+	defaultProvisionerName = "example.com/isilon"
 )
 
 type isilonProvisioner struct {
@@ -266,17 +258,17 @@ func main() {
 		glog.Info("Isilon quotas enabled")
 		isiQuota = true
 	} else {
-		glog.Info("ISI_QUOTA_ENABLED not set.  Quota support disabled")
+		glog.Info("ISI_QUOTA_ENABLED not set. Quota support disabled")
 	}
 
-	isiExport := false
+	isiExport := true
 	isiExportEnable := strings.ToUpper(os.Getenv("ISI_EXPORT_ENABLE"))
 
-	if isiExportEnable == "TRUE" {
-		glog.Info("Isilon export enabled")
-		isiExport = true
+	if isiExportEnable == "FALSE" {
+		glog.Info("Isilon volume export disabled")
+		isiExport = false
 	} else {
-		glog.Info("ISI_EXPORT_ENABLE not set. Volume export disabled")
+		glog.Info("Isilon volume export enabled. Set ISI_EXPORT_ENABLE to FALSE to disable it")
 	}
 
 	isiEndpoint := "https://" + isiServer + ":8080"
@@ -314,6 +306,10 @@ func main() {
 
 	// Start the provision controller which will dynamically provision isilon
 	// PVs
-	pc := controller.NewProvisionController(clientset, resyncPeriod, provisionerName, isilonProvisioner, serverVersion.GitVersion, exponentialBackOffOnError, failedRetryThreshold, leasePeriod, renewDeadline, retryPeriod, termLimit)
+	pc := controller.NewProvisionController(clientset, provisionerName, isilonProvisioner, serverVersion.GitVersion,
+		controller.ExponentialBackOffOnError(false),
+		controller.FailedProvisionThreshold(5),
+		controller.FailedDeleteThreshold(5),
+	)
 	pc.Run(wait.NeverStop)
 }

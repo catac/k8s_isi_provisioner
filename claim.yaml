@@ -2,9 +2,8 @@ kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
   name: isilon-pvc
-  annotations:
-    volume.beta.kubernetes.io/storage-class: "k8s-isilon"
 spec:
+  storageClassName: k8s-isilon
   accessModes:
     - ReadWriteMany
   resources:

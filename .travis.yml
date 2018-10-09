@@ -1,6 +1,6 @@
 language: go
 go:
-  - 1.8.3
+  - 1.11.1
 sudo: required
 services:
   - docker
@@ -8,10 +8,10 @@ services:
 install: true
 
 script:
-  - ./build.sh
+  - make
 
 after_success:
   - if [ "$TRAVIS_BRANCH" == "master" ]; then
     docker login -u="$DOCKER_USERNAME" -p="$DOCKER_PASSWORD";
-    docker push xphyr/k8s_isi_provisioner;
+    docker push catac/k8s_isi_provisioner;
     fi
