@@ -20,11 +20,11 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path"
 	"strings"
 	"time"
-	"fmt"
 
 	"syscall"
 
@@ -32,18 +32,17 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/kubernetes-incubator/external-storage/lib/controller"
+	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/rest"
 )
 
 const (
-	provisionerName           = "example.com/isilon"
+	defaultProvisionerName    = "example.com/isilon"
 	exponentialBackOffOnError = false
 	failedRetryThreshold      = 5
-	serverEnvVar              = "ISI_SERVER"
 	resyncPeriod              = 15 * time.Second
 	leasePeriod               = controller.DefaultLeaseDuration
 	retryPeriod               = controller.DefaultRetryPeriod
@@ -60,10 +59,14 @@ type isilonProvisioner struct {
 	// The directory to create the new volume in, as well as the
 	// username, password and server to connect to
 	volumeDir string
-	// useName    string
-	serverName string
+	// isilon server name
+	isiServer string
+	// nfs server name
+	nfsServer string
 	// apply/enfoce quotas to volumes
 	quotaEnable bool
+	// create isilon export
+	exportEnable bool
 }
 
 var _ controller.Provisioner = &isilonProvisioner{}
@@ -104,10 +107,13 @@ func (p *isilonProvisioner) Provision(options controller.VolumeOptions) (*v1.Per
 			glog.Info("Quota set to: %v on volume: %s", pvcSize, pvName)
 		}
 	}
-	rcExport, err := p.isiClient.ExportVolume(context.Background(), pvName)
-	glog.Infof("Created Isilon export: %v", rcExport)
-	if err != nil {
-		panic(err)
+
+	if p.exportEnable {
+		rcExport, err := p.isiClient.ExportVolume(context.Background(), pvName)
+		glog.Infof("Created Isilon export: %v", rcExport)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	if err := os.MkdirAll(path, 0777); err != nil {
@@ -129,9 +135,9 @@ func (p *isilonProvisioner) Provision(options controller.VolumeOptions) (*v1.Per
 		ObjectMeta: metav1.ObjectMeta{
 			Name: options.PVName,
 			Annotations: map[string]string{
-				"isilonProvisionerIdentity": 								p.identity,
-				"isilonVolume":              								pvName,
-				"volume.beta.kubernetes.io/mount-options": 	mountOptions,
+				"isilonProvisionerIdentity":               p.identity,
+				"isilonVolume":                            pvName,
+				"volume.beta.kubernetes.io/mount-options": mountOptions,
 			},
 		},
 		Spec: v1.PersistentVolumeSpec{
@@ -142,7 +148,7 @@ func (p *isilonProvisioner) Provision(options controller.VolumeOptions) (*v1.Per
 			},
 			PersistentVolumeSource: v1.PersistentVolumeSource{
 				NFS: &v1.NFSVolumeSource{
-					Server:   p.serverName,
+					Server:   p.nfsServer,
 					Path:     path,
 					ReadOnly: false,
 				},
@@ -178,9 +184,10 @@ func (p *isilonProvisioner) Delete(volume *v1.PersistentVolume) error {
 		}
 	}
 
-	// if we get here we can destroy the volume
-	if err := p.isiClient.Unexport(context.Background(), isiVolume); err != nil {
-		panic(err)
+	if p.exportEnable {
+		if err := p.isiClient.Unexport(context.Background(), isiVolume); err != nil {
+			panic(err)
+		}
 	}
 
 	// if we get here we can destroy the volume
@@ -216,10 +223,23 @@ func main() {
 		glog.Fatalf("Error getting server version: %v", err)
 	}
 
+	provisionerName := os.Getenv("PROVISIONER_NAME")
+	if provisionerName == "" {
+		glog.Info("PROVISIONER_NAME not set, using default: %v", defaultProvisionerName)
+		provisionerName = defaultProvisionerName
+	} else {
+		glog.Info("Using provisioner name: %v", provisionerName)
+	}
+
 	// Get server name and NFS root path from environment
 	isiServer := os.Getenv("ISI_SERVER")
 	if isiServer == "" {
 		glog.Fatal("ISI_SERVER not set")
+	}
+	nfsServer := os.Getenv("NFS_SERVER")
+	if nfsServer == "" {
+		glog.Info("NFS_SERVER not set, using same as ISI_SERVER")
+		nfsServer = isiServer
 	}
 	isiPath := os.Getenv("ISI_PATH")
 	if isiPath == "" {
@@ -249,9 +269,21 @@ func main() {
 		glog.Info("ISI_QUOTA_ENABLED not set.  Quota support disabled")
 	}
 
+	isiExport := false
+	isiExportEnable := strings.ToUpper(os.Getenv("ISI_EXPORT_ENABLE"))
+
+	if isiExportEnable == "TRUE" {
+		glog.Info("Isilon export enabled")
+		isiExport = true
+	} else {
+		glog.Info("ISI_EXPORT_ENABLE not set. Volume export disabled")
+	}
+
 	isiEndpoint := "https://" + isiServer + ":8080"
 	glog.Info("Connecting to Isilon at: " + isiEndpoint)
-	glog.Info("Creating exports at: " + isiPath)
+	if isiExport {
+		glog.Info("Creating exports at: " + isiPath)
+	}
 
 	i, err := isi.NewClientWithArgs(
 		context.Background(),
@@ -271,11 +303,13 @@ func main() {
 	// Create the provisioner: it implements the Provisioner interface expected by
 	// the controller
 	isilonProvisioner := &isilonProvisioner{
-		identity:    isiServer,
-		isiClient:   i,
-		volumeDir:   isiPath,
-		serverName:  isiServer,
-		quotaEnable: isiQuota,
+		identity:     isiServer,
+		isiClient:    i,
+		volumeDir:    isiPath,
+		isiServer:    isiServer,
+		nfsServer:    nfsServer,
+		quotaEnable:  isiQuota,
+		exportEnable: isiExport,
 	}
 
 	// Start the provision controller which will dynamically provision isilon

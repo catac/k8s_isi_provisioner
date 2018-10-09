@@ -14,14 +14,15 @@
 
 .PHONY: image
 
-IMAGE?=xphyr/k8s_isi_provisioner
+IMAGE?=catac/k8s_isi_provisioner
 GIT_VERSION := $(shell git describe --abbrev=4 --dirty --always --tags)
 
 image: isi-provisioner
 	docker build -t $(IMAGE) -f Dockerfile.scratch .
 
 isi-provisioner: $(shell find . -name "*.go")
-	glide install -v
+	#glide install -v
+	dep ensure
 	GOOS=linux CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static" -X main.version=$(GIT_VERSION)' -o k8s_isi_provisioner .
 
 .PHONY: clean
