@@ -217,10 +217,10 @@ func main() {
 
 	provisionerName := os.Getenv("PROVISIONER_NAME")
 	if provisionerName == "" {
-		glog.Info("PROVISIONER_NAME not set, using default: %v", defaultProvisionerName)
+		glog.Info("PROVISIONER_NAME not set, using default:" + defaultProvisionerName)
 		provisionerName = defaultProvisionerName
 	} else {
-		glog.Info("Using provisioner name: %v", provisionerName)
+		glog.Info("Using provisioner name: " + provisionerName)
 	}
 
 	// Get server name and NFS root path from environment
