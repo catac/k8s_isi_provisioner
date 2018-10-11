@@ -18,7 +18,7 @@ IMAGE?=catac/k8s_isi_provisioner
 GIT_VERSION := $(shell git describe --abbrev=4 --dirty --always --tags)
 
 image: isi-provisioner
-	docker build -t $(IMAGE) -f Dockerfile.scratch .
+	docker build -t $(IMAGE) .
 
 isi-provisioner: $(shell find . -name "*.go")
 	dep ensure

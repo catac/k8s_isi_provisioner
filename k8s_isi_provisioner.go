@@ -108,10 +108,6 @@ func (p *isilonProvisioner) Provision(options controller.VolumeOptions) (*v1.Per
 		}
 	}
 
-	if err := os.MkdirAll(path, 0777); err != nil {
-		return nil, err
-	}
-
 	// Get the mount options of the storage class
 	mountOptions := ""
 	for k, v := range options.Parameters {
