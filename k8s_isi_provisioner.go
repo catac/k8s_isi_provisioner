@@ -59,6 +59,8 @@ type isilonProvisioner struct {
 	quotaEnable bool
 	// create isilon export
 	exportEnable bool
+	// user for export
+	isiUser string
 }
 
 var _ controller.Provisioner = &isilonProvisioner{}
@@ -96,16 +98,23 @@ func (p *isilonProvisioner) Provision(options controller.VolumeOptions) (*v1.Per
 		}
 		err := p.isiClient.SetQuotaSize(context.Background(), pvName, pvcSize)
 		if err != nil {
-			glog.Info("Quota set to: %v on volume: %s", pvcSize, pvName)
+			return nil, err
 		}
+		glog.Infof("Quota set to: %v on volume: %s", pvcSize, pvName)
 	}
 
 	if p.exportEnable {
-		rcExport, err := p.isiClient.ExportVolume(context.Background(), pvName)
-		glog.Infof("Created Isilon export: %v", rcExport)
+		expID, err := p.isiClient.ExportVolume(context.Background(), pvName)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
+		glog.Infof("Created Isilon export: %v", expID)
+
+		err = p.isiClient.EnableRootMappingByID(context.Background(), expID, p.isiUser)
+		if err != nil {
+			return nil, err
+		}
+		glog.Infof("Enabled root mapping for export: %v", expID)
 	}
 
 	// Get the mount options of the storage class
@@ -157,30 +166,36 @@ func (p *isilonProvisioner) Delete(volume *v1.PersistentVolume) error {
 	if ann != p.identity {
 		return &controller.IgnoredError{Reason: "identity annotation on PV does not match ours"}
 	}
-	isiVolume, ok := volume.Annotations["isilonVolume"]
+	pvName, ok := volume.Annotations["isilonVolume"]
 	if !ok {
 		return &controller.IgnoredError{Reason: "No isilon volume defined"}
 	}
 	// Back out the quota settings first
 
 	if p.quotaEnable {
-		quota, _ := p.isiClient.GetQuota(context.Background(), isiVolume)
+		quota, _ := p.isiClient.GetQuota(context.Background(), pvName)
 		if quota != nil {
-			if err := p.isiClient.ClearQuota(context.Background(), isiVolume); err != nil {
-				panic(err)
+			if err := p.isiClient.ClearQuota(context.Background(), pvName); err != nil {
+				return err
 			}
 		}
 	}
 
 	if p.exportEnable {
-		if err := p.isiClient.Unexport(context.Background(), isiVolume); err != nil {
-			panic(err)
+		err := p.isiClient.DisableRootMapping(context.Background(), pvName)
+		if err != nil {
+			return err
+		}
+
+		err = p.isiClient.Unexport(context.Background(), pvName)
+		if err != nil {
+			return err
 		}
 	}
 
 	// if we get here we can destroy the volume
-	if err := p.isiClient.DeleteVolume(context.Background(), isiVolume); err != nil {
-		panic(err)
+	if err := p.isiClient.DeleteVolume(context.Background(), pvName); err != nil {
+		return err
 	}
 
 	return nil
@@ -298,6 +313,7 @@ func main() {
 		nfsServer:    nfsServer,
 		quotaEnable:  isiQuota,
 		exportEnable: isiExport,
+		isiUser:      isiUser,
 	}
 
 	// Start the provision controller which will dynamically provision isilon
